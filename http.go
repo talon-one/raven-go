@@ -62,7 +62,7 @@ type Http struct {
 
 func (h *Http) Class() string { return "request" }
 
-// Recovery handler to wrap the stdlib net/http Mux.
+// RecoveryHandler to wrap the stdlib net/http Mux.
 // Example:
 //	http.HandleFunc("/", raven.RecoveryHandler(func(w http.ResponseWriter, r *http.Request) {
 //		...
@@ -71,14 +71,37 @@ func RecoveryHandler(handler func(http.ResponseWriter, *http.Request)) func(http
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rval := recover(); rval != nil {
-				debug.PrintStack()
-				rvalStr := fmt.Sprint(rval)
-				packet := NewPacket(rvalStr, NewException(errors.New(rvalStr), GetOrNewStacktrace(rval.(error), 2, 3, nil)), NewHttp(r))
-				Capture(packet, nil)
+				DealWithRecoveredValue(rval, r)
 				w.WriteHeader(http.StatusInternalServerError)
 			}
 		}()
 
 		handler(w, r)
 	}
+}
+
+// DealWithRecoveredValue - helper to do ad-hoc error reporting after recovered panic
+// you might want to perform custom cleanup routines yourself
+func DealWithRecoveredValue(rval interface{}, r *http.Request) {
+	debug.PrintStack()
+	err := convertError(rval)
+	rvalStr := fmt.Sprint(rval)
+	packet := NewPacket(rvalStr, NewException(err, GetOrNewStacktrace(err, 2, 3, nil)), NewHttp(r))
+	Capture(packet, nil)
+}
+
+// convertError properly converts response values from `recover()` to a Golang error type
+// https://stackoverflow.com/questions/19934641/go-returning-from-defer
+func convertError(r interface{}) error {
+	var res error
+	// find out exactly what the error was and set err
+	switch x := r.(type) {
+	case string:
+		res = errors.New(x)
+	case error:
+		res = x
+	default:
+		res = errors.New("Unknown panic")
+	}
+	return res
 }
